@@ -1,124 +1,219 @@
-##  Branch Precomputation Unit (BPU)
-# Concept Overview
+# Branch Precomputation Unit (BPU)
 
-Modern processor faces significant challenges in handling control hazards due to branch instruction especially data dependent branch instructions. This leads to stall, pipeline flushes or mispredicted paths this lead to reduced performance and throughput in Inorder processors.
+A lightweight Branch Precomputation Unit (BPU) designed to reduce branch penalties in an in-order RV32I pipeline by pre-decoding upcoming instructions, computing branch targets early, and resolving conditional outcomes using forwarded or register values — all before the normal decode/execute stages complete.
 
-Modern high performance processors use history based dynamic predictors for branch prediction like TAGE which are not suitable for low power and are constraint inorder processors and they also struggle in resolving data dependent branches. In systems for low power application they usually employ a one cycle penality model or two bit dynamic branch predictors.
+---
 
-Instead of waiting for the ID/EX stage to evaluate branch conditions, the BPU:
+## Table of contents
 
-   -Pre-decodes and identifies branch/jump instructions early (Stage 1).
+- [Overview](#overview)  
+- [Key features](#key-features)  
+- [Design & Architecture](#design--architecture)  
+  - [Stages](#stages)  
+  - [Components](#components)  
+- [Classes & high-level behavior](#classes--high-level-behavior)  
+- [Pipeline integration](#pipeline-integration)  
+- [Instruction memory and labels](#instruction-memory-and-labels)  
+- [Directory structure](#directory-structure)  
+- [Getting started](#getting-started)  
+- [Running the simulator](#running-the-simulator)  
+- [Contributing](#contributing)  
+- [License](#license)
 
-   -Resolves their outcomes using forwarded or register values (Stage 2).
+---
 
-   -Redirects the PC immediately when a branch is determined taken — avoiding unnecessary pipeline bubbles.
+## Overview
 
-This design allows simultaneous evaluation of two upcoming instructions and early branch target calculation, which improves fetch efficiency and reduces branch penalty cycles.
+Modern processors suffer pipeline stalls, flushes, and wasted cycles when branch instructions are encountered, especially when branches are data-dependent. Many high-performance dynamic predictors (e.g., TAGE) are unsuitable for low-power or constrained in-order processors. The BPU offers a simpler, lower-power approach: run a small, parallel pre-decode and pre-evaluation window ahead of the main pipeline to reduce branch penalties.
 
- # Design Architecture
+Instead of waiting for ID/EX to evaluate branch conditions, the BPU:
+- Pre-decodes and classifies upcoming instructions early.
+- Pre-computes Branch Target Addresses (BTAs).
+- Uses forwarded or register values to evaluate branch conditions early.
+- Redirects the PC immediately when a branch is determined taken, avoiding unnecessary fetches and pipeline bubbles.
 
-The BPU consists of three main component types and one control manager:
+This enables simultaneous evaluation of two upcoming instructions, earlier target calculation, and improved fetch efficiency.
 
-1️⃣ BTA Commuter
+---
 
-A lightweight arithmetic unit used to pre-compute Branch Target Addresses (BTAs):
+## Key features
 
-class MinimalALU:
-    def compute_bta(self, pc, imm_offset):
-        return pc + imm_offset
+- Early identification of branch/jump instructions (pre-decode).
+- Lightweight BTA computation unit (doesn't stall main ALU).
+- Early condition evaluation using forwarded data from pipeline registers.
+- Support for all RV32I base formats: R, I, S, B, U, J.
+- Simple dependency detection to request stalls when necessary (e.g., load-use hazards).
+- Configurable two-instruction prefetch window for improved throughput.
 
+---
 
-This avoids stalling the main ALU for simple PC+offset operations.
+## Design & Architecture
 
-2️⃣ Comparator
+The BPU is structured around two precomputation stages and a small set of compact components.
 
-Evaluates branch conditions such as beq, bne, blt, etc.
-It supports both signed and unsigned comparisons:
+### Stages
 
-class Comparator:
-    def is_taken(self, op, v1, v2):
-        return {"beq": v1 == v2, "bne": v1 != v2, ...}[op]
+- Stage 1 — Pre-decode & dependency check (_run_bpu_stage1)
+  - Fetch two consecutive instructions (instr1, instr2).
+  - Identify branch/jump instructions and compute their BTAs.
+  - Check dependencies with ID/EX/MEM pipeline stages (load-use hazards, register dependencies).
+  - Request a stall when dependencies prevent safe early resolution.
+  - If an unconditional jump (jal) is found, mark it taken immediately with computed BTA.
 
-3️⃣ BPUDecoder
+- Stage 2 — Branch evaluation (_run_bpu_stage2)
+  - Resolve branch conditions using:
+    - Register file values
+    - Forwarded values from ID/EX/MEM/WB
+    - Precomputed ALU results
+  - If the branch is taken, return the redirect target PC (BTA).
+  - Otherwise, execution continues normally.
 
-A lightweight instruction decoder that identifies whether an instruction is:
+- run_bpu_cycle()
+  - Called each clock cycle to integrate the stages:
+    - Run Stage 1 on newly fetched PCs.
+    - If dependency-free, run Stage 2 for previously queued branches.
+    - Emit a directive to the fetch unit on taken branches to redirect PC immediately.
+    - Precompute results for the current ID-stage instruction to support early forwarding.
 
-A conditional branch (type 1)
+### Components
 
-A jump (jalr, type 2)
+1. BTA Commuter (MinimalALU)
+   - Lightweight arithmetic unit to pre-compute PC + offset.
+   - Example:
+     ```python
+     class MinimalALU:
+         def compute_bta(self, pc, imm_offset):
+             return pc + imm_offset
+     ```
 
-An unconditional jump (jal, type 3)
-This helps Stage 1 quickly classify instructions without full decode.
+2. Comparator
+   - Evaluates branch conditions (beq, bne, blt, bge, etc.), supporting signed/unsigned where needed.
+   - Example:
+     ```python
+     class Comparator:
+         def is_taken(self, op, v1, v2):
+             return {
+                 "beq": v1 == v2,
+                 "bne": v1 != v2,
+                 "blt": int(v1) < int(v2),   # signed
+                 "bge": int(v1) >= int(v2),
+                 "bltu": (v1 & 0xffffffff) < (v2 & 0xffffffff),  # unsigned
+                 "bgeu": (v1 & 0xffffffff) >= (v2 & 0xffffffff)
+             }[op]
+     ```
 
-# BranchPrecomputationUnit 
+3. BPUDecoder
+   - Lightweight decoder that classifies instructions quickly:
+     - Conditional branch (B-type)
+     - Indirect jump (jalr)
+     - Unconditional jump (jal)
+   - Avoids full, heavyweight decode in Stage 1 to reduce latency.
 
-This class orchestrates both precomputation stages and interacts with the pipeline registers.
+---
 
-Stage 1 – Pre-Decoding and Dependency Check (_run_bpu_stage1)
+## Classes & high-level behavior
 
--Fetches two consecutive instructions (instr1, instr2).
+- BranchPrecomputationUnit
+  - Orchestrates Stage 1 and Stage 2.
+  - Communicates with pipeline registers (IF/ID/EX/MEM/WB) for forwarded data.
+  - Emits directives (e.g., IC.Directive) for immediate PC redirection on taken branches.
 
--Detects whether either is a branch or jump.
+Main methods (high-level):
+- _run_bpu_stage1(pc, fetch_packets)
+  - Pre-decodes next two fetched instructions.
+  - Computes BTAs with MinimalALU.
+  - Checks hazards/dependencies and sets stall requests.
+  - Enqueues candidate branch(s) for Stage 2 evaluation.
 
--Computes Branch Target Addresses (BTAs) for them.
+- _run_bpu_stage2(enqueued_branches, regfile, forwarded_values)
+  - Evaluates branch conditions with Comparator using best-available operand values.
+  - Decides taken/not-taken and returns redirect target if taken.
 
--Checks for dependencies with instructions in the ID and EX stages (especially load-use hazards).
+- run_bpu_cycle(...)
+  - Calls Stage 1 and Stage 2 appropriately each cycle.
+  - Integrates with fetch logic to redirect PC on taken branches.
+  - Provides early forwarding information to ID stage if available.
 
--If a dependency exists → requests a stall.
+---
 
--If an unconditional jump (jal) is found → immediately marks taken with the computed BTA.
+## Pipeline integration
 
-Stage 2 – Branch Evaluation (_run_bpu_stage2)
+- The BPU runs ahead of decode, creating a "branch pre-decode window".
+- If Stage 1 finds an unconditional jump (jal), the BPU immediately signals a redirect.
+- For conditional branches, Stage 1 enqueues candidates; Stage 2 evaluates them as soon as operands are available (including forwarded values).
+- The BPU can request pipeline stalls when it detects load-use hazards or missing forwarded data necessary to resolve a branch safely.
 
--Resolves branch conditions using:
+---
 
---Register File values,
+## Instruction memory and labels
 
---Forwarded data from ID/EX/MEM/WB stages,
+- Supports all base RV32I instruction formats:
+  - R-type, I-type, S-type, B-type, U-type, J-type.
+- Branch/jump labels (e.g., beq x1, x2, loop) are resolved to absolute PC addresses via a label dictionary (label_dict) during assembly/load time.
 
---Or precomputed ALU results.
+---
 
--If the branch is taken → returns the redirect target PC (BTA).
+## Directory structure
 
---Otherwise → execution continues normally.
+Root summary:
+```
+├── README.md                       # Project documentation (this file)
+└── code/                           # Source files
+   ├── Instruction_class.py         # Instruction object representation and field decoding
+   ├── component_def.py             # Register file, memory, ALU, pipeline register definitions
+   ├── stages_def.py                # Implementation of pipeline stages (IF, ID, EX, MEM, WB)
+   ├── full_pipeline_risc32i.py     # Main pipeline simulator integrating all modules
+   └── test_instruction.py          # Simple harness to load assembly and run the simulator
+```
 
-# Pipeline Integration (run_bpu_cycle)
+---
 
-The run_bpu_cycle() method integrates both stages within each clock cycle:
+## Getting started
 
-Stage 1 runs when a new PC is fetched.
+Prerequisites:
+- Python 3.8+ (recommended)
+- No external packages required unless introduced later
 
-If dependency-free, Stage 2 evaluates previously queued branches.
+Quick setup:
+1. Clone the repository:
+   ```
+   git clone https://github.com/MRIDHUL22041889/Branch_precomputation.git
+   cd Branch_precomputation
+   ```
+2. Inspect the code in the `code/` directory.
 
-If a branch resolves taken, it emits a final directive (IC.Directive) to the fetch unit for immediate redirection.
+---
 
-Simultaneously, the BPU precomputes results for the current ID-stage instruction to support early forwarding.
+## Running the simulator
 
-This means the BPU runs ahead of the decode stage — effectively creating a “branch pre-decode window.”
+To run the basic test harness:
+```
+python3 code/test_instruction.py
+```
 
-# InstructionMemory Integration
+This script will load example assembly (if provided) and run the pipeline simulator, demonstrating BPU behavior and effects on fetch/redirection.
 
-Supports all base RV32I instruction formats:
+For more advanced experiments:
+- Edit test instruction sequences in `test_instruction.py`.
+- Adjust pipeline and BPU parameters inside `full_pipeline_risc32i.py` and `component_def.py`.
 
-R-type (add, sub, etc.)
+---
 
-I-type (addi, lw, etc.)
+## Contributing
 
-S-type (sw, sb, etc.)
+Contributions, bug reports, and suggestions are welcome. If you want to:
+- Open an issue describing the problem or enhancement.
+- Submit a pull request with tests and a short description of the change.
 
-B-type (beq, bne, etc.)
+Please follow common best practices: small commits, clear messages, and tests or demonstrations for new behavior.
 
-U-type (lui, auipc)
+---
 
-J-type (jal, jalr)
+## License
 
-Labels in branch or jump operands (e.g. beq x1, x2, loop) are resolved into absolute PC addresses via the label_dict.
+This project is provided "as-is". Add a LICENSE file in the repository root to make your preferred license explicit (e.g., MIT, Apache-2.0).
 
-# Directory Structure 
-├── README.md # Project documentation (this file)
-└── code/ # All source files
-   ├── Instruction_class.py # Instruction object representation and field decoding
-   ├── component_def.py # Definitions for register file, memory, ALU, and pipeline registers
-   ├── stages_def.py # Implementation of pipeline stages (IF, ID, EX, MEM, WB)
-   ├── full_pipeline_risc32i.py # Main pipeline simulator integrating all modules
-   ├── test_instruction.py # Load the asm to run here
+---
+
+Author: MRIDHUL22041889
+Source: https://github.com/MRIDHUL22041889/Branch_precomputation/blob/f858312c333893edd200430f656e211982c94c1f/README.md
