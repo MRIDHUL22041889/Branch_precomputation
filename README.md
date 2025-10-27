@@ -7,11 +7,11 @@ Modern high performance processors use history based dynamic predictors for bran
 
 Instead of waiting for the ID/EX stage to evaluate branch conditions, the BPU:
 
-Pre-decodes and identifies branch/jump instructions early (Stage 1).
+   -Pre-decodes and identifies branch/jump instructions early (Stage 1).
 
-Resolves their outcomes using forwarded or register values (Stage 2).
+   -Resolves their outcomes using forwarded or register values (Stage 2).
 
-Redirects the PC immediately when a branch is determined taken — avoiding unnecessary pipeline bubbles.
+   -Redirects the PC immediately when a branch is determined taken — avoiding unnecessary pipeline bubbles.
 
 This design allows simultaneous evaluation of two upcoming instructions and early branch target calculation, which improves fetch efficiency and reduces branch penalty cycles.
 
