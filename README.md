@@ -114,5 +114,11 @@ J-type (jal, jalr)
 
 Labels in branch or jump operands (e.g. beq x1, x2, loop) are resolved into absolute PC addresses via the label_dict.
 
-# Model Structure 
-
+# Directory Structure 
+├── README.md # Project documentation (this file)
+└── code/ # All source files
+   ├── Instruction_class.py # Instruction object representation and field decoding
+   ├── component_def.py # Definitions for register file, memory, ALU, and pipeline registers
+   ├── stages_def.py # Implementation of pipeline stages (IF, ID, EX, MEM, WB)
+   ├── full_pipeline_risc32i.py # Main pipeline simulator integrating all modules
+   ├── test_instruction.py # Load the asm to run here
