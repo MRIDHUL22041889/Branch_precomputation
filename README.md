@@ -17,9 +17,8 @@ A lightweight Branch Precomputation Unit (BPU) designed to reduce branch penalti
 - [Directory structure](#directory-structure)  
 - [Getting started](#getting-started)  
 - [Running the simulator](#running-the-simulator)  
-- [Contributing](#contributing)  
 - [License](#license)
-
+- [To Do](#To_do)
 ---
 
 ## Overview
@@ -199,13 +198,9 @@ For more advanced experiments:
 
 ---
 
-## Contributing
-
-Contributions, bug reports, and suggestions are welcome. If you want to:
-- Open an issue describing the problem or enhancement.
-- Submit a pull request with tests and a short description of the change.
-
-Please follow common best practices: small commits, clear messages, and tests or demonstrations for new behavior.
+## To_do
+-Not verified and tested for heavy dependencies , need to be fixed
+-Need to do proper benchmarking
 
 ---
 
