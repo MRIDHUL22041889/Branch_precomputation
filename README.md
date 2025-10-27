@@ -199,8 +199,8 @@ For more advanced experiments:
 ---
 
 ## To_do
---Not verified and tested for heavy dependencies , need to be fixed.
---Need to do proper benchmarking.
+- Not verified and tested for heavy dependencies , need to be fixed.
+- Need to do proper benchmarking.
 
 ---
 
